@@ -80,7 +80,7 @@ def read_catalog(f):
 
     f.seek(16)
     for index in range(511):
-        name    = f.read(12).rstrip(b'\ \t\n\r\x00').decode('utf-8')
+        name    = f.read(12).rstrip(b' \t\n\r\x00').decode('utf-8')
         padding = f.read(3)
         status  = parse_status(int(f.read(1)[0]))
 
@@ -147,7 +147,7 @@ def action_in(mmb, index, ssd, name, lock, force):
             disk = g.read()
 
         if name is None:
-            name = os.path.basename(filepath)[:12]
+            name = os.path.basename(ssd)[:12]
 
         n = 12 - len(name)
         name += '\x00' * n
