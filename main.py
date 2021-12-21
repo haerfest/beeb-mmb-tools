@@ -52,12 +52,16 @@ def parse_args():
     parser_rm = actions.add_parser('rm', help='remove enclosed disk image')
     parser_rm.add_argument('index', type=index, nargs='+', help='index of disk to remove')
 
-    parser_in = actions.add_parser('in', help='inserts a disk image')
-    parser_in.add_argument('-f', '--force', action='store_true', help='overwrite occupied index')
-    parser_in.add_argument('-i', '--index', type=index,          help='index to insert disk at (default: first available)')
-    parser_in.add_argument('-l', '--lock',  action='store_true', help='lock disk')
-    parser_in.add_argument('-n', '--name',                       help='name for disk')
-    parser_in.add_argument('ssd',                                help='disk to insert')
+    parser_im = actions.add_parser('im', help='imports a disk image')
+    parser_im.add_argument('-f', '--force', action='store_true', help='overwrite occupied index')
+    parser_im.add_argument('-i', '--index', type=index,          help='index to import disk at (default: first available)')
+    parser_im.add_argument('-l', '--lock',  action='store_true', help='lock disk')
+    parser_im.add_argument('-n', '--name',                       help='name for disk')
+    parser_im.add_argument('ssd',                                help='disk to insert')
+
+    parser_ex = actions.add_parser('ex', help='exports a disk image')
+    parser_ex.add_argument('-f', '--force', action='store_true', help='overwrite existing disk')
+    parser_ex.add_argument('index', type=index,                  help='index to export disk from')
 
     return parser.parse_args()
 
@@ -128,7 +132,7 @@ def action_rm(mmb, indices):
             f.write(b'\xF0')
 
 
-def action_in(mmb, index, ssd, name, lock, force):
+def action_im(mmb, index, ssd, name, lock, force):
     with open(mmb, 'rb+') as f:
         catalog = read_catalog(f)
 
@@ -161,6 +165,22 @@ def action_in(mmb, index, ssd, name, lock, force):
         f.write(disk)
 
 
+def action_ex(mmb, index, force):
+    with open(mmb, 'rb') as f:
+        catalog = read_catalog(f)
+
+        ensure(index in catalog, f'no disk in index {index}')
+
+        name = catalog[index].name + '.ssd'  # TODO escape?
+        ensure(not os.path.exists(name) or force, f'file {name} exists')
+
+        f.seek(8192 + index * 200 * 1024)
+        disk = f.read(200 * 1024)
+
+    with open(name, 'wb') as f:
+        f.write(disk)
+            
+
 def main():
     args = parse_args()
 
@@ -174,8 +194,11 @@ def main():
         if args.action == 'rm':
             return action_rm(args.mmb, args.index)
 
-        if args.action == 'in':
-            return action_in(args.mmb, args.index, args.ssd, args.name, args.lock, args.force)
+        if args.action == 'im':
+            return action_im(args.mmb, args.index, args.ssd, args.name, args.lock, args.force)
+
+        if args.action == 'ex':
+            return action_ex(args.mmb, args.index, args.force)
 
     except Oops as oops:
         print(f'Oops: {oops}', file=sys.stderr)
