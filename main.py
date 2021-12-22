@@ -4,9 +4,10 @@
 import os
 import sys
 
-from argparse    import ArgumentParser
+from argparse    import ArgumentParser, Namespace
 from collections import namedtuple
 from enum        import Enum
+from typing      import Any, Callable, IO, List, Union
 
 
 Disk = namedtuple('Disk', ['name', 'status'])
@@ -36,16 +37,16 @@ STATUS_STR = {
 }
 
 
-def index(s):
+def index(s: str) -> int:
     i = int(s)
 
     if not (0 <= i <= 511):
-        return ValueError(s)
+        raise ValueError(s)
 
     return i
 
     
-def parse_args():
+def parse_args() -> Namespace:
     parser = ArgumentParser()
     parser.add_argument('--mmb', '-m', default='BEEB.MMB', help='the MMB file (default: ./BEEB.MMB)')
 
@@ -104,8 +105,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def parse_status(status):
-    status = int(status[0])
+def parse_status(b: bytes) -> Status:
+    status = int(b[0])
 
     if status == 0:
         return Status.READONLY
@@ -119,7 +120,7 @@ def parse_status(status):
     return Status.INVALID
 
 
-def as_status(status):
+def as_status(status: Status) -> bytes:
     s = {
         Status.INVALID    : b'\xFF',
         Status.READONLY   : b'\x00',
@@ -129,24 +130,24 @@ def as_status(status):
     return s[status]
 
 
-def parse_name(s):
+def parse_name(s: bytes) -> str:
     return s.rstrip(b' \t\n\r\x00').decode('utf-8')
 
 
-def as_name(s):
+def as_name(s: str) -> bytes:
     s = s[:12]
     n = 12 - len(s)
     s += '\x00' * n
     return s.encode('utf-8')
 
 
-def read_mapping(f):
+def read_mapping(f: IO) -> List[int]:
     f.seek(0)
     mapping = f.read(8)
     return [int(hi) * 256 + int(lo) for lo, hi in zip(mapping[:4], mapping[4:])]
 
 
-def read_catalog(f):
+def read_catalog(f: IO) -> List[Disk]:
     catalog = []
 
     f.seek(16)
@@ -161,7 +162,7 @@ def read_catalog(f):
     return catalog
 
 
-def action_nw(mmb, force):
+def action_nw(mmb: str, force: bool) -> None:
     ensure(not os.path.exists(mmb) or force, f'file {mmb} exists')
 
     with open(mmb, 'wb') as f:
@@ -176,7 +177,7 @@ def action_nw(mmb, force):
         f.write(b'\x00')
 
 
-def action_dd(mmb, d0, d1, d2, d3):
+def action_dd(mmb: str, d0: int, d1: int, d2: int, d3: int) -> None:
     ensure(len(set([d0, d1, d2, d3])) == 4, f'disk numbers must be unique')
 
     mapping = [
@@ -187,11 +188,11 @@ def action_dd(mmb, d0, d1, d2, d3):
         f.write(bytes(mapping))
 
 
-def is_formatted(disk):
+def is_formatted(disk: Disk) -> bool:
     return disk.status in {Status.READONLY, Status.READWRITE}
 
 
-def action_ls(mmb, show_all):
+def action_ls(mmb: str, show_all: bool) -> None:
     with open(mmb, 'rb') as f:
         mapping = read_mapping(f)
         catalog = read_catalog(f)
@@ -206,7 +207,7 @@ def action_ls(mmb, show_all):
     print(f'{disks}/511 disks in use, drive mapping {" ".join(str(d) for d in mapping)}')
 
 
-def visit(mmb, indices, assertion, action):
+def visit(mmb: str, indices: Union[int, List[int]], ensurer: Callable[[int, Disk], Any], marker: Callable[[IO], Any]):
     if not isinstance(indices, list):
         indices = [indices]
 
@@ -214,18 +215,18 @@ def visit(mmb, indices, assertion, action):
         catalog = read_catalog(f)
 
         for index in indices:
-            if assertion:
-                assertion(index, catalog[index])
+            if ensurer:
+                ensurer(index, catalog[index])
 
             f.seek(16 + index * 16)
-            action(f)
+            marker(f)
 
 
-def mk_ensurer(status):
+def mk_ensurer(status: Status) -> Callable[[int, Disk], None]:
     return lambda index, disk: ensure(disk.status == status, f'disk {index} is {STATUS_STR[disk.status]}')
 
 
-def mk_marker(status):
+def mk_marker(status: Status) -> Callable[[IO], int]:
     def marker(f):
         f.seek(f.tell() + 15)
         f.write(as_status(status))
@@ -233,27 +234,27 @@ def mk_marker(status):
     return marker
 
 
-def action_rm(mmb, indices):
+def action_rm(mmb: str, indices: Union[int, List[int]]) -> None:
     visit(mmb, indices, mk_ensurer(Status.READWRITE), mk_marker(Status.UNFORMATTED))
 
 
-def action_un(mmb, indices):
+def action_un(mmb: str, indices: Union[int, List[int]]) -> None:
     visit(mmb, indices, mk_ensurer(Status.UNFORMATTED), mk_marker(Status.READWRITE))
 
 
-def action_ro(mmb, indices):
+def action_ro(mmb: str, indices: Union[int, List[int]]) -> None:
     visit(mmb, indices, mk_ensurer(Status.READWRITE), mk_marker(Status.READONLY))
 
 
-def action_rw(mmb, indices):
+def action_rw(mmb: str, indices: Union[int, List[int]]) -> None:
     visit(mmb, indices, mk_ensurer(Status.READONLY), mk_marker(Status.READWRITE))
 
 
-def action_rn(mmb, index, name):
+def action_rn(mmb: str, index: int, name: str) -> None:
     visit(mmb, index, mk_ensurer(Status.READWRITE), lambda f: f.write(as_name(name)))
         
 
-def action_im(mmb, index, ssd, name, readonly, force):
+def action_im(mmb: str, index: int, ssd: str, name: str, readonly: bool, force: bool) -> None:
     with open(mmb, 'rb+') as f:
         catalog = read_catalog(f)
 
@@ -284,7 +285,7 @@ def action_im(mmb, index, ssd, name, readonly, force):
         f.write(disk)
 
 
-def action_ex(mmb, indices, force):
+def action_ex(mmb: str, indices: Union[int, List[int]], force: bool) -> None:
     if not isinstance(indices, list):
         indices = [indices]
 
@@ -324,12 +325,12 @@ def action_cp(mmb, src, dst, force):
         f.write(name_etc)
 
 
-def action_mv(mmb, src, dst, force):
+def action_mv(mmb: str, src: int, dst: int, force: bool) -> None:
     action_cp(mmb, src, dst, force)
     action_rm(mmb, src)
 
 
-def main():
+def main() -> None:
     args = parse_args()
 
     actions = dict(nw=lambda: action_nw(args.mmb, args.force),
