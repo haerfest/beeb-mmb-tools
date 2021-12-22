@@ -77,10 +77,18 @@ def parse_args():
     parser_rn.add_argument('index', type=index, help='the index of the disk to rename')
     parser_rn.add_argument('name',              help='the new name of the disk')
 
+    parser_ro = actions.add_parser('ro', help='marks a disk read-only')
+    parser_ro.add_argument('index', type=index, nargs='+', help='the indices of the disks to mark')
+
+    parser_rw = actions.add_parser('rw', help='marks a disk read/write')
+    parser_rw.add_argument('index', type=index, nargs='+', help='the indices of the disks to mark')
+
     return parser.parse_args()
 
 
 def parse_status(status):
+    status = int(status[0])
+
     if status == 0:
         return Status.READONLY
 
@@ -111,7 +119,7 @@ def read_catalog(f):
     for index in range(511):
         name    = parse_name(f.read(12))
         padding = f.read(3)
-        status  = parse_status(int(f.read(1)[0]))
+        status  = parse_status(f.read(1))
 
         if status not in [Status.INVALID, Status.UNFORMATTED]:
             catalog[index] = Disk(name=name, status=status)
@@ -242,6 +250,38 @@ def action_rn(mmb, index, name):
         f.write(as_name(name))
         
 
+def action_ro(mmb, indices):
+    if not isinstance(indices, list):
+        indices = [indices]
+
+    with open(mmb, 'rb+') as f:
+        catalog = read_catalog(f)
+
+        for index in indices:
+            f.seek(16 + index * 16 + 15)
+
+            status = parse_status(f.read(1))
+            if status == Status.READWRITE:
+                f.seek(16 + index * 16 + 15)
+                f.write(b'\x00')
+
+
+def action_rw(mmb, indices):
+    if not isinstance(indices, list):
+        indices = [indices]
+
+    with open(mmb, 'rb+') as f:
+        catalog = read_catalog(f)
+
+        for index in indices:
+            f.seek(16 + index * 16 + 15)
+
+            status = parse_status(f.read(1))
+            if status == Status.READONLY:
+                f.seek(16 + index * 16 + 15)
+                f.write(b'\x0F')
+
+
 def main():
     args = parse_args()
 
@@ -252,7 +292,9 @@ def main():
                    ex=lambda: action_ex(args.mmb, args.index, args.force),
                    cp=lambda: action_cp(args.mmb, args.src, args.dst, args.force),
                    mv=lambda: action_mv(args.mmb, args.src, args.dst, args.force),
-                   rn=lambda: action_rn(args.mmb, args.index, args.name))
+                   rn=lambda: action_rn(args.mmb, args.index, args.name),
+                   ro=lambda: action_ro(args.mmb, args.index),
+                   rw=lambda: action_rw(args.mmb, args.index))
         
     try:
         actions[args.action]()
