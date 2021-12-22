@@ -119,7 +119,7 @@ def read_catalog(f):
     return catalog
 
 
-def action_new(mmb, force):
+def action_nw(mmb, force):
     ensure(not os.path.exists(mmb) or force, f'file {mmb} exists')
 
     with open(mmb, 'wb') as f:
@@ -156,8 +156,6 @@ def action_rm(mmb, indices):
             f.seek(16 + index * 16 + 15)
             f.write(b'\xF0')
 
-            print(f'{index:03d}: removed')
-
 
 def action_im(mmb, index, ssd, name, lock, force):
     with open(mmb, 'rb+') as f:
@@ -188,7 +186,6 @@ def action_im(mmb, index, ssd, name, lock, force):
         f.seek(8192 + index * 200 * 1024)
         f.write(disk)
 
-    print(f'{index:03d}: imported')
 
 def action_ex(mmb, indices, force):
     if not isinstance(indices, list):
@@ -208,8 +205,6 @@ def action_ex(mmb, indices, force):
 
             with open(name, 'wb') as g:
                 g.write(disk)
-
-            print(f'{index:03d}: exported as {name}')
             
 
 def action_cp(mmb, src, dst, force, mv=False):
@@ -248,31 +243,17 @@ def action_rn(mmb, index, name):
 def main():
     args = parse_args()
 
+    actions = dict(nw=lambda: action_nw(args.mmb, args.force),
+                   ls=lambda: action_ls(args.mmb),
+                   rm=lambda: action_rm(args.mmb, args.index),
+                   im=lambda: action_im(args.mmb, args.index, args.ssd, args.name, args.lock, args.force),
+                   ex=lambda: action_ex(args.mmb, args.index, args.force),
+                   cp=lambda: action_cp(args.mmb, args.src, args.dst, args.force),
+                   mv=lambda: action_cp(args.mmb, args.src, args.dst, args.force, mv=True),
+                   rn=lambda: action_rn(args.mmb, args.index, args.name))
+        
     try:
-        if args.action == 'nw':
-            return action_new(args.mmb, args.force)
-
-        if args.action == 'ls':
-            return action_ls(args.mmb)
-
-        if args.action == 'rm':
-            return action_rm(args.mmb, args.index)
-
-        if args.action == 'im':
-            return action_im(args.mmb, args.index, args.ssd, args.name, args.lock, args.force)
-
-        if args.action == 'ex':
-            return action_ex(args.mmb, args.index, args.force)
-
-        if args.action == 'cp':
-            return action_cp(args.mmb, args.src, args.dst, args.force)
-
-        if args.action == 'mv':
-            return action_cp(args.mmb, args.src, args.dst, args.force, mv=True)
-
-        if args.action == 'rn':
-            return action_rn(args.mmb, args.index, args.name)
-
+        actions[args.action]()
     except Oops as oops:
         print(f'{oops}', file=sys.stderr)
         exit(1)
