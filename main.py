@@ -179,8 +179,10 @@ def action_nw(mmb, force):
 def action_dd(mmb, d0, d1, d2, d3):
     ensure(len(set([d0, d1, d2, d3])) == 4, f'disk numbers must be unique')
 
-    zipped  = zip(*[(d & 255, d // 256) for d in [d0, d1, d2, d3]])
-    mapping = [d for tupl in zipped for d in tupl]
+    mapping = [
+        d0 &  255, d1 &  255, d2 &  255, d3 &  255,
+        d0 // 256, d1 // 256, d2 // 256, d3 // 256
+    ]
     with open(mmb, 'rb+') as f:
         f.write(bytes(mapping))
 
