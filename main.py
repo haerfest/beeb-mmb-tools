@@ -22,10 +22,18 @@ def ensure(condition, message):
 
 
 class Status(Enum):
-    UNFORMATTED = 0
-    READWRITE   = 1
-    READONLY    = 2
-    INVALID     = 3
+    INVALID     = 0
+    READONLY    = 1
+    READWRITE   = 2
+    UNFORMATTED = 3
+
+
+STATUS_STR = {
+    Status.INVALID    : 'Invalid',
+    Status.READONLY   : 'RO',
+    Status.READWRITE  : 'R/W',
+    Status.UNFORMATTED: 'Unformatted',
+}
 
 
 def index(s):
@@ -47,7 +55,8 @@ def parse_args():
     parser_nw.add_argument('-f', '--force', action='store_true', help='overwrite an existing file')
 
     parser_ls = actions.add_parser('ls', help='list disks')
-    parser_ls.add_argument('index', type=index, nargs='*', help='the indices of the disks to list (default: all)')
+    parser_ls.add_argument('-a', '--all', action='store_true', help='list all disks')
+    parser_ls.add_argument('index', type=index, nargs='*',     help='the indices of the disks to list (default: all)')
 
     parser_rm = actions.add_parser('rm', help='remove disks')
     parser_rm.add_argument('index', type=index, nargs='+', help='the indices of the disks to remove')
@@ -55,7 +64,7 @@ def parse_args():
     parser_im = actions.add_parser('im', help='import a disk image')
     parser_im.add_argument('-f', '--force', action='store_true', help='overwrite an existing disk')
     parser_im.add_argument('-i', '--index', type=index,          help='the index to import the disk at (default: first available)')
-    parser_im.add_argument('-l', '--lock',  action='store_true', help='lock the disk, making it read-only')
+    parser_im.add_argument('-r', '--ro',    action='store_true', help='make the disk read-only')
     parser_im.add_argument('-n', '--name',                       help='the name for the disk')
     parser_im.add_argument('ssd',                                help='the SSD disk file to insert')
 
@@ -82,6 +91,9 @@ def parse_args():
 
     parser_rw = actions.add_parser('rw', help='marks a disk read/write')
     parser_rw.add_argument('index', type=index, nargs='+', help='the indices of the disks to mark')
+
+    parser_un = actions.add_parser('un', help='undelete a removed disk')
+    parser_un.add_argument('index', type=index, nargs='+', help='the indices of the disks to undelete')
 
     return parser.parse_args()
 
@@ -113,7 +125,7 @@ def as_name(s):
 
 
 def read_catalog(f):
-    catalog = {}
+    catalog = []
 
     f.seek(16)
     for index in range(511):
@@ -121,8 +133,8 @@ def read_catalog(f):
         padding = f.read(3)
         status  = parse_status(f.read(1))
 
-        if status not in [Status.INVALID, Status.UNFORMATTED]:
-            catalog[index] = Disk(name=name, status=status)
+        disk = Disk(name=name, status=status)
+        catalog.append(disk)
 
     return catalog
 
@@ -142,17 +154,17 @@ def action_nw(mmb, force):
         f.write(b'\x00')
 
 
-def action_ls(mmb):
-    s = {
-        Status.READWRITE: 'R/W',
-        Status.READONLY:  'RO',
-    }
+def is_formatted(disk):
+    return disk.status in {Status.READONLY, Status.READWRITE}
 
+
+def action_ls(mmb, show_all):
     with open(mmb, 'rb') as f:
         catalog = read_catalog(f)
 
-    for index, disk in catalog.items():
-        print(f'{index:03d}: {disk.name:12s} {s[disk.status]}')
+    for index, disk in enumerate(catalog):
+        if show_all or is_formatted(disk):
+            print(f'{index:03d}: {disk.name:12s} {STATUS_STR[disk.status]}')
 
 
 def action_rm(mmb, indices):
@@ -160,17 +172,42 @@ def action_rm(mmb, indices):
         indices = [indices]
 
     with open(mmb, 'rb+') as f:
+        catalog = read_catalog(f)
+
         for index in indices:
+            f.seek(16 + index * 16 + 15)
+
+            status = parse_status(f.read(1))
+            ensure(status == Status.READWRITE, f'disk {index} is {STATUS_STR[status]}')
+
             f.seek(16 + index * 16 + 15)
             f.write(b'\xF0')
 
 
-def action_im(mmb, index, ssd, name, lock, force):
+def action_un(mmb, indices):
+    if not isinstance(indices, list):
+        indices = [indices]
+
+    with open(mmb, 'rb+') as f:
+        catalog = read_catalog(f)
+
+        for index in indices:
+            f.seek(16 + index * 16 + 15)
+
+            status = parse_status(f.read(1))
+            ensure(status == Status.UNFORMATTED, f'disk {index} is {STATUS_STR[status]}')
+
+            f.seek(16 + index * 16 + 15)
+            f.write(b'\x0F')
+
+
+def action_im(mmb, index, ssd, name, readonly, force):
     with open(mmb, 'rb+') as f:
         catalog = read_catalog(f)
 
         if index is None:
-            available = list(set(range(511)) - set(catalog))
+            formatted = set(index for index, disk in enumerate(catalog) if is_formatted(disk))
+            available = list(set(range(511)) - formatted)
             ensure(available, 'no free indices')
             index = sorted(available)[0]
 
@@ -178,7 +215,7 @@ def action_im(mmb, index, ssd, name, lock, force):
         ensure(size > 0, 'ssd cannot be empty')
         ensure(size <= 200 * 1024, 'ssd cannot be larger than 200 KiB')
 
-        ensure(index not in catalog or force, f'index {index} is occupied')
+        ensure(not is_formatted(catalog[index]) or force, f'index {index} is occupied')
 
         with open(ssd, 'rb') as g:
             disk = g.read()
@@ -189,7 +226,7 @@ def action_im(mmb, index, ssd, name, lock, force):
         f.seek(16 + index * 16)
         f.write(as_name(name))
         f.write(b'\x00\x00\x00')
-        f.write(b'\x00' if lock else b'\x0F')
+        f.write(b'\x00' if readonly else b'\x0F')
 
         f.seek(8192 + index * 200 * 1024)
         f.write(disk)
@@ -203,7 +240,7 @@ def action_ex(mmb, indices, force):
         catalog = read_catalog(f)
 
         for index in indices:
-            ensure(index in catalog, f'no disk in index {index}')
+            ensure(is_formatted(catalog[index]), f'no disk in index {index}')
 
             name = catalog[index].name + '.ssd'  # TODO escape?
             ensure(not os.path.exists(name) or force, f'file {name} exists')
@@ -219,8 +256,8 @@ def action_cp(mmb, src, dst, force):
     with open(mmb, 'rb+') as f:
         catalog = read_catalog(f)
 
-        ensure(src in catalog, f'no disk in index {src}')
-        ensure(dst not in catalog or force, f'index {dst} occupied')
+        ensure(is_formatted(catalog[src]), f'no disk in index {src}')
+        ensure(not is_formatted(catalog[dst]) or force, f'index {dst} occupied')
 
         f.seek(8192 + src * 200 * 1024)
         disk = f.read(200 * 1024)
@@ -244,7 +281,7 @@ def action_rn(mmb, index, name):
     with open(mmb, 'rb+') as f:
         catalog = read_catalog(f)
 
-        ensure(index in catalog, f'no disk in index {index}')
+        ensure(is_formatted(catalog[index]), f'no disk in index {index}')
 
         f.seek(16 + index * 16)
         f.write(as_name(name))
@@ -261,9 +298,10 @@ def action_ro(mmb, indices):
             f.seek(16 + index * 16 + 15)
 
             status = parse_status(f.read(1))
-            if status == Status.READWRITE:
-                f.seek(16 + index * 16 + 15)
-                f.write(b'\x00')
+            ensure(catalog[index].status == Status.READWRITE, f'disk {index} is {STATUS_STR[status]}')
+
+            f.seek(16 + index * 16 + 15)
+            f.write(b'\x00')
 
 
 def action_rw(mmb, indices):
@@ -277,29 +315,31 @@ def action_rw(mmb, indices):
             f.seek(16 + index * 16 + 15)
 
             status = parse_status(f.read(1))
-            if status == Status.READONLY:
-                f.seek(16 + index * 16 + 15)
-                f.write(b'\x0F')
+            ensure(catalog[index].status == Status.READONLY, f'disk {index} is {STATUS_STR[status]}')
+
+            f.seek(16 + index * 16 + 15)
+            f.write(b'\x0F')
 
 
 def main():
     args = parse_args()
 
     actions = dict(nw=lambda: action_nw(args.mmb, args.force),
-                   ls=lambda: action_ls(args.mmb),
+                   ls=lambda: action_ls(args.mmb, args.all),
                    rm=lambda: action_rm(args.mmb, args.index),
-                   im=lambda: action_im(args.mmb, args.index, args.ssd, args.name, args.lock, args.force),
+                   im=lambda: action_im(args.mmb, args.index, args.ssd, args.name, args.ro, args.force),
                    ex=lambda: action_ex(args.mmb, args.index, args.force),
                    cp=lambda: action_cp(args.mmb, args.src, args.dst, args.force),
                    mv=lambda: action_mv(args.mmb, args.src, args.dst, args.force),
                    rn=lambda: action_rn(args.mmb, args.index, args.name),
                    ro=lambda: action_ro(args.mmb, args.index),
-                   rw=lambda: action_rw(args.mmb, args.index))
+                   rw=lambda: action_rw(args.mmb, args.index),
+                   un=lambda: action_un(args.mmb, args.index))
         
     try:
         actions[args.action]()
     except Oops as oops:
-        print(f'{oops}', file=sys.stderr)
+        print(f'Oops: {oops}', file=sys.stderr)
         exit(1)
 
 
