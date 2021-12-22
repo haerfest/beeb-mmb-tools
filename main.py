@@ -207,7 +207,7 @@ def action_ex(mmb, indices, force):
                 g.write(disk)
             
 
-def action_cp(mmb, src, dst, force, mv=False):
+def action_cp(mmb, src, dst, force):
     with open(mmb, 'rb+') as f:
         catalog = read_catalog(f)
 
@@ -226,8 +226,10 @@ def action_cp(mmb, src, dst, force, mv=False):
         f.seek(16 + dst * 16)
         f.write(name_etc)
 
-    if mv:
-        action_rm(mmb, src)
+
+def action_mv(mmb, src, dst, force):
+    action_cp(mmb, src, dst, force)
+    action_rm(mmb, src)
 
 
 def action_rn(mmb, index, name):
@@ -249,7 +251,7 @@ def main():
                    im=lambda: action_im(args.mmb, args.index, args.ssd, args.name, args.lock, args.force),
                    ex=lambda: action_ex(args.mmb, args.index, args.force),
                    cp=lambda: action_cp(args.mmb, args.src, args.dst, args.force),
-                   mv=lambda: action_cp(args.mmb, args.src, args.dst, args.force, mv=True),
+                   mv=lambda: action_mv(args.mmb, args.src, args.dst, args.force),
                    rn=lambda: action_rn(args.mmb, args.index, args.name))
         
     try:
