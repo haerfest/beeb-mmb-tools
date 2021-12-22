@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+#
+# A Python 3 command-line script to allow the user to modify a BEEB.MMB file,
+# which is a container format of Acorn BBC/Electron single-sided disk images.
+# The file is used by various SD-card solutions for said machines that employ
+# MMFS.
 
 
 import os
@@ -35,6 +40,31 @@ STATUS_STR = {
     Status.READWRITE  : 'R/W',
     Status.UNFORMATTED: 'Unformatted',
 }
+
+
+def parse_status(b: bytes) -> Status:
+    status = int(b[0])
+
+    if status == 0:
+        return Status.READONLY
+
+    if 1 <= status <= 0x7F:
+        return Status.READWRITE
+
+    if 0x80 <= status <= 0xFE:
+        return Status.UNFORMATTED
+
+    return Status.INVALID
+
+
+def as_status(status: Status) -> bytes:
+    s = {
+        Status.INVALID    : b'\xFF',
+        Status.READONLY   : b'\x00',
+        Status.READWRITE  : b'\x0F',
+        Status.UNFORMATTED: b'\xF0',
+    }
+    return s[status]
 
 
 def index(s: str) -> int:
@@ -103,31 +133,6 @@ def parse_args() -> Namespace:
     parser_un.add_argument('index', type=index, nargs='+', help='the indices of the disks to undelete')
 
     return parser.parse_args()
-
-
-def parse_status(b: bytes) -> Status:
-    status = int(b[0])
-
-    if status == 0:
-        return Status.READONLY
-
-    if 1 <= status <= 0x7F:
-        return Status.READWRITE
-
-    if 0x80 <= status <= 0xFE:
-        return Status.UNFORMATTED
-
-    return Status.INVALID
-
-
-def as_status(status: Status) -> bytes:
-    s = {
-        Status.INVALID    : b'\xFF',
-        Status.READONLY   : b'\x00',
-        Status.READWRITE  : b'\x0F',
-        Status.UNFORMATTED: b'\xF0',
-    }
-    return s[status]
 
 
 def parse_name(s: bytes) -> str:
