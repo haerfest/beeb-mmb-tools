@@ -39,29 +39,43 @@ def index(s):
     
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('--mmb', '-m', default='BEEB.MMB', help='the mmb file (default: ./BEEB.MMB)')
+    parser.add_argument('--mmb', '-m', default='BEEB.MMB', help='the MMB file (default: ./BEEB.MMB)')
 
     actions = parser.add_subparsers(required=True, dest='action', help='action to perform')
 
-    parser_new = actions.add_parser('new', help='create new mmb')
-    parser_new.add_argument('-f', '--force', action='store_true', help='overwrite existing mmb')
+    parser_nw = actions.add_parser('nw', help='create a new empty MMB file')
+    parser_nw.add_argument('-f', '--force', action='store_true', help='overwrite an existing file')
 
-    parser_ls = actions.add_parser('ls', help='list enclosed disk')
-    parser_ls.add_argument('index', type=index, nargs='*', help='index of disk to list (default: all)')
+    parser_ls = actions.add_parser('ls', help='list disks')
+    parser_ls.add_argument('index', type=index, nargs='*', help='the indices of the disks to list (default: all)')
 
-    parser_rm = actions.add_parser('rm', help='remove enclosed disk image')
-    parser_rm.add_argument('index', type=index, nargs='+', help='index of disk to remove')
+    parser_rm = actions.add_parser('rm', help='remove disks')
+    parser_rm.add_argument('index', type=index, nargs='+', help='the indices of the disks to remove')
 
-    parser_im = actions.add_parser('im', help='imports a disk image')
-    parser_im.add_argument('-f', '--force', action='store_true', help='overwrite occupied index')
-    parser_im.add_argument('-i', '--index', type=index,          help='index to import disk at (default: first available)')
-    parser_im.add_argument('-l', '--lock',  action='store_true', help='lock disk')
-    parser_im.add_argument('-n', '--name',                       help='name for disk')
-    parser_im.add_argument('ssd',                                help='disk to insert')
+    parser_im = actions.add_parser('im', help='import a disk image')
+    parser_im.add_argument('-f', '--force', action='store_true', help='overwrite an existing disk')
+    parser_im.add_argument('-i', '--index', type=index,          help='the index to import the disk at (default: first available)')
+    parser_im.add_argument('-l', '--lock',  action='store_true', help='lock the disk, making it read-only')
+    parser_im.add_argument('-n', '--name',                       help='the name for the disk')
+    parser_im.add_argument('ssd',                                help='the SSD disk file to insert')
 
-    parser_ex = actions.add_parser('ex', help='exports a disk image')
-    parser_ex.add_argument('-f', '--force', action='store_true', help='overwrite existing disk')
-    parser_ex.add_argument('index', type=index,                  help='index to export disk from')
+    parser_ex = actions.add_parser('ex', help='export a disk image')
+    parser_ex.add_argument('-f', '--force', action='store_true', help='overwrite an existing disk')
+    parser_ex.add_argument('index', type=index,                  help='the indices of the disks to export')
+
+    parser_cp = actions.add_parser('cp', help='copies a disk image')
+    parser_cp.add_argument('-f', '--force', action='store_true', help='overwrite an existing disk')
+    parser_cp.add_argument('src',           type=index,          help='the index of the disk to copy')
+    parser_cp.add_argument('dst',           type=index,          help='the index to copy the disk to')
+
+    parser_mv = actions.add_parser('mv', help='moves a disk image')
+    parser_mv.add_argument('-f', '--force', action='store_true', help='overwrite an existing disk')
+    parser_mv.add_argument('src',           type=index,          help='the index of the disk to move')
+    parser_mv.add_argument('dst',           type=index,          help='the index to move the disk to')
+
+    parser_rn = actions.add_parser('rn', help='renames a disk image')
+    parser_rn.add_argument('index', type=index, help='the index of the disk to rename')
+    parser_rn.add_argument('name',              help='the new name of the disk')
 
     return parser.parse_args()
 
@@ -79,12 +93,23 @@ def parse_status(status):
     return Status.INVALID
 
 
+def parse_name(s):
+    return s.rstrip(b' \t\n\r\x00').decode('utf-8')
+
+
+def as_name(s):
+    s = s[:12]
+    n = 12 - len(s)
+    s += '\x00' * n
+    return s.encode('utf-8')
+
+
 def read_catalog(f):
     catalog = {}
 
     f.seek(16)
     for index in range(511):
-        name    = f.read(12).rstrip(b' \t\n\r\x00').decode('utf-8')
+        name    = parse_name(f.read(12))
         padding = f.read(3)
         status  = parse_status(int(f.read(1)[0]))
 
@@ -95,7 +120,7 @@ def read_catalog(f):
 
 
 def action_new(mmb, force):
-    ensure(not os.path.exists(mmb) or force, 'mmb exists')
+    ensure(not os.path.exists(mmb) or force, f'file {mmb} exists')
 
     with open(mmb, 'wb') as f:
         f.write(b'\x00\x01\x02\x03\x00\x00\x00\x00')
@@ -126,10 +151,12 @@ def action_rm(mmb, indices):
     if not isinstance(indices, list):
         indices = [indices]
 
-    with open(mmb, 'wb+') as f:
+    with open(mmb, 'rb+') as f:
         for index in indices:
             f.seek(16 + index * 16 + 15)
             f.write(b'\xF0')
+
+            print(f'{index:03d}: removed')
 
 
 def action_im(mmb, index, ssd, name, lock, force):
@@ -151,41 +178,78 @@ def action_im(mmb, index, ssd, name, lock, force):
             disk = g.read()
 
         if name is None:
-            name = os.path.basename(ssd)[:12]
-
-        n = 12 - len(name)
-        name += '\x00' * n
+            name, _ = os.path.splitext(os.path.basename(ssd))
 
         f.seek(16 + index * 16)
-        f.write(name.encode('utf-8'))
+        f.write(as_name(name))
         f.write(b'\x00\x00\x00')
         f.write(b'\x00' if lock else b'\x0F')
 
         f.seek(8192 + index * 200 * 1024)
         f.write(disk)
 
+    print(f'{index:03d}: imported')
 
-def action_ex(mmb, index, force):
+def action_ex(mmb, indices, force):
+    if not isinstance(indices, list):
+        indices = [indices]
+
     with open(mmb, 'rb') as f:
+        catalog = read_catalog(f)
+
+        for index in indices:
+            ensure(index in catalog, f'no disk in index {index}')
+
+            name = catalog[index].name + '.ssd'  # TODO escape?
+            ensure(not os.path.exists(name) or force, f'file {name} exists')
+
+            f.seek(8192 + index * 200 * 1024)
+            disk = f.read(200 * 1024)
+
+            with open(name, 'wb') as g:
+                g.write(disk)
+
+            print(f'{index:03d}: exported as {name}')
+            
+
+def action_cp(mmb, src, dst, force, mv=False):
+    with open(mmb, 'rb+') as f:
+        catalog = read_catalog(f)
+
+        ensure(src in catalog, f'no disk in index {src}')
+        ensure(dst not in catalog or force, f'index {dst} occupied')
+
+        f.seek(8192 + src * 200 * 1024)
+        disk = f.read(200 * 1024)
+
+        f.seek(8192 + dst * 200 * 1024)
+        f.write(disk)
+
+        f.seek(16 + src * 16)
+        name_etc = f.read(16)
+
+        f.seek(16 + dst * 16)
+        f.write(name_etc)
+
+    if mv:
+        action_rm(mmb, src)
+
+
+def action_rn(mmb, index, name):
+    with open(mmb, 'rb+') as f:
         catalog = read_catalog(f)
 
         ensure(index in catalog, f'no disk in index {index}')
 
-        name = catalog[index].name + '.ssd'  # TODO escape?
-        ensure(not os.path.exists(name) or force, f'file {name} exists')
-
-        f.seek(8192 + index * 200 * 1024)
-        disk = f.read(200 * 1024)
-
-    with open(name, 'wb') as f:
-        f.write(disk)
-            
+        f.seek(16 + index * 16)
+        f.write(as_name(name))
+        
 
 def main():
     args = parse_args()
 
     try:
-        if args.action == 'new':
+        if args.action == 'nw':
             return action_new(args.mmb, args.force)
 
         if args.action == 'ls':
@@ -200,8 +264,17 @@ def main():
         if args.action == 'ex':
             return action_ex(args.mmb, args.index, args.force)
 
+        if args.action == 'cp':
+            return action_cp(args.mmb, args.src, args.dst, args.force)
+
+        if args.action == 'mv':
+            return action_cp(args.mmb, args.src, args.dst, args.force, mv=True)
+
+        if args.action == 'rn':
+            return action_rn(args.mmb, args.index, args.name)
+
     except Oops as oops:
-        print(f'Oops: {oops}', file=sys.stderr)
+        print(f'{oops}', file=sys.stderr)
         exit(1)
 
 
