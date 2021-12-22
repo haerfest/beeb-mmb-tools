@@ -54,6 +54,12 @@ def parse_args():
     parser_nw = actions.add_parser('nw', help='create a new empty MMB file')
     parser_nw.add_argument('-f', '--force', action='store_true', help='overwrite an existing file')
 
+    parser_dd = actions.add_parser('dd', help='set the default disks to mount in the drives')
+    parser_dd.add_argument('drive0', type=index, help='the index of the disk to mount in drive 0')
+    parser_dd.add_argument('drive1', type=index, help='the index of the disk to mount in drive 1')
+    parser_dd.add_argument('drive2', type=index, help='the index of the disk to mount in drive 2')
+    parser_dd.add_argument('drive3', type=index, help='the index of the disk to mount in drive 3')
+
     parser_ls = actions.add_parser('ls', help='list disks')
     parser_ls.add_argument('-a', '--all', action='store_true', help='list all disks')
     parser_ls.add_argument('index', type=index, nargs='*',     help='the indices of the disks to list (default: all)')
@@ -134,6 +140,12 @@ def as_name(s):
     return s.encode('utf-8')
 
 
+def read_mapping(f):
+    f.seek(0)
+    mapping = f.read(8)
+    return [int(hi) * 256 + int(lo) for lo, hi in zip(mapping[:4], mapping[4:])]
+
+
 def read_catalog(f):
     catalog = []
 
@@ -164,17 +176,32 @@ def action_nw(mmb, force):
         f.write(b'\x00')
 
 
+def action_dd(mmb, d0, d1, d2, d3):
+    ensure(len(set([d0, d1, d2, d3])) == 4, f'disk numbers must be unique')
+
+    zipped  = zip(*[(d & 255, d // 256) for d in [d0, d1, d2, d3]])
+    mapping = [d for tupl in zipped for d in tupl]
+    with open(mmb, 'rb+') as f:
+        f.write(bytes(mapping))
+
+
 def is_formatted(disk):
     return disk.status in {Status.READONLY, Status.READWRITE}
 
 
 def action_ls(mmb, show_all):
     with open(mmb, 'rb') as f:
+        mapping = read_mapping(f)
         catalog = read_catalog(f)
 
+    disks = 0
     for index, disk in enumerate(catalog):
         if show_all or is_formatted(disk):
             print(f'{index:03d}: {disk.name:12s} {STATUS_STR[disk.status]}')
+        if is_formatted(disk):
+            disks += 1
+
+    print(f'{disks}/511 disks in use, drive mapping {" ".join(str(d) for d in mapping)}')
 
 
 def visit(mmb, indices, assertion, action):
@@ -304,6 +331,7 @@ def main():
     args = parse_args()
 
     actions = dict(nw=lambda: action_nw(args.mmb, args.force),
+                   dd=lambda: action_dd(args.mmb, args.drive0, args.drive1, args.drive2, args.drive3),
                    ls=lambda: action_ls(args.mmb, args.all),
                    rm=lambda: action_rm(args.mmb, args.index),
                    im=lambda: action_im(args.mmb, args.index, args.ssd, args.name, args.ro, args.force),
