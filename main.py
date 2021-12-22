@@ -113,6 +113,16 @@ def parse_status(status):
     return Status.INVALID
 
 
+def as_status(status):
+    s = {
+        Status.INVALID    : b'\xFF',
+        Status.READONLY   : b'\x00',
+        Status.READWRITE  : b'\x0F',
+        Status.UNFORMATTED: b'\xF0',
+    }
+    return s[status]
+
+
 def parse_name(s):
     return s.rstrip(b' \t\n\r\x00').decode('utf-8')
 
@@ -167,7 +177,7 @@ def action_ls(mmb, show_all):
             print(f'{index:03d}: {disk.name:12s} {STATUS_STR[disk.status]}')
 
 
-def action_rm(mmb, indices):
+def visit(mmb, indices, assertion, action):
     if not isinstance(indices, list):
         indices = [indices]
 
@@ -175,31 +185,44 @@ def action_rm(mmb, indices):
         catalog = read_catalog(f)
 
         for index in indices:
-            f.seek(16 + index * 16 + 15)
+            if assertion:
+                assertion(index, catalog[index])
 
-            status = parse_status(f.read(1))
-            ensure(status == Status.READWRITE, f'disk {index} is {STATUS_STR[status]}')
+            f.seek(16 + index * 16)
+            action(f)
 
-            f.seek(16 + index * 16 + 15)
-            f.write(b'\xF0')
+
+def mk_ensurer(status):
+    return lambda index, disk: ensure(disk.status == status, f'disk {index} is {STATUS_STR[disk.status]}')
+
+
+def mk_marker(status):
+    def marker(f):
+        f.seek(f.tell() + 15)
+        f.write(as_status(status))
+
+    return marker
+
+
+def action_rm(mmb, indices):
+    visit(mmb, indices, mk_ensurer(Status.READWRITE), mk_marker(Status.UNFORMATTED))
 
 
 def action_un(mmb, indices):
-    if not isinstance(indices, list):
-        indices = [indices]
+    visit(mmb, indices, mk_ensurer(Status.UNFORMATTED), mk_marker(Status.READWRITE))
 
-    with open(mmb, 'rb+') as f:
-        catalog = read_catalog(f)
 
-        for index in indices:
-            f.seek(16 + index * 16 + 15)
+def action_ro(mmb, indices):
+    visit(mmb, indices, mk_ensurer(Status.READWRITE), mk_marker(Status.READONLY))
 
-            status = parse_status(f.read(1))
-            ensure(status == Status.UNFORMATTED, f'disk {index} is {STATUS_STR[status]}')
 
-            f.seek(16 + index * 16 + 15)
-            f.write(b'\x0F')
+def action_rw(mmb, indices):
+    visit(mmb, indices, mk_ensurer(Status.READONLY), mk_marker(Status.READWRITE))
 
+
+def action_rn(mmb, index, name):
+    visit(mmb, index, mk_ensurer(Status.READWRITE), lambda f: f.write(as_name(name)))
+        
 
 def action_im(mmb, index, ssd, name, readonly, force):
     with open(mmb, 'rb+') as f:
@@ -275,50 +298,6 @@ def action_cp(mmb, src, dst, force):
 def action_mv(mmb, src, dst, force):
     action_cp(mmb, src, dst, force)
     action_rm(mmb, src)
-
-
-def action_rn(mmb, index, name):
-    with open(mmb, 'rb+') as f:
-        catalog = read_catalog(f)
-
-        ensure(is_formatted(catalog[index]), f'no disk in index {index}')
-
-        f.seek(16 + index * 16)
-        f.write(as_name(name))
-        
-
-def action_ro(mmb, indices):
-    if not isinstance(indices, list):
-        indices = [indices]
-
-    with open(mmb, 'rb+') as f:
-        catalog = read_catalog(f)
-
-        for index in indices:
-            f.seek(16 + index * 16 + 15)
-
-            status = parse_status(f.read(1))
-            ensure(catalog[index].status == Status.READWRITE, f'disk {index} is {STATUS_STR[status]}')
-
-            f.seek(16 + index * 16 + 15)
-            f.write(b'\x00')
-
-
-def action_rw(mmb, indices):
-    if not isinstance(indices, list):
-        indices = [indices]
-
-    with open(mmb, 'rb+') as f:
-        catalog = read_catalog(f)
-
-        for index in indices:
-            f.seek(16 + index * 16 + 15)
-
-            status = parse_status(f.read(1))
-            ensure(catalog[index].status == Status.READONLY, f'disk {index} is {STATUS_STR[status]}')
-
-            f.seek(16 + index * 16 + 15)
-            f.write(b'\x0F')
 
 
 def main():
